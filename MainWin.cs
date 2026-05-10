@@ -1,3 +1,6 @@
+// Application: JPEG Compressor CS
+// Developer: Walton Surratt
+// Copyright (c) 2026 Surratt Solutions. All rights reserved.
 using System.Drawing.Imaging;
 
 namespace JpegCompressorCS
