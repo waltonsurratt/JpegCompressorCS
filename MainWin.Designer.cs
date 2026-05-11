@@ -249,6 +249,7 @@
             Controls.Add(label1);
             Controls.Add(statusStrip);
             Controls.Add(menuStrip1);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
             Icon = (Icon)resources.GetObject("$this.Icon");
             MainMenuStrip = menuStrip1;
             Margin = new Padding(2);
