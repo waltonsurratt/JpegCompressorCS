@@ -23,8 +23,10 @@ namespace JpegCompressorCS
         public MainWin()
         {
             InitializeComponent();
-            chkRemoveMetadata.Checked = RemoveMetadata;
             InitializeDragDropFeature();
+
+
+            chkRemoveMetadata.Checked = RemoveMetadata;
         }
 
         private void InitializeDragDropFeature()

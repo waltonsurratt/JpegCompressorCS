@@ -59,7 +59,8 @@
             menuStrip1.Items.AddRange(new ToolStripItem[] { fileToolStripFile, helpToolStripHelp });
             menuStrip1.Location = new Point(0, 0);
             menuStrip1.Name = "menuStrip1";
-            menuStrip1.Size = new Size(478, 33);
+            menuStrip1.Padding = new Padding(5, 2, 0, 2);
+            menuStrip1.Size = new Size(372, 28);
             menuStrip1.TabIndex = 0;
             menuStrip1.Text = "menuStrip1";
             // 
@@ -67,20 +68,20 @@
             // 
             fileToolStripFile.DropDownItems.AddRange(new ToolStripItem[] { fileToolStripRestart, fileToolStripExit });
             fileToolStripFile.Name = "fileToolStripFile";
-            fileToolStripFile.Size = new Size(54, 29);
+            fileToolStripFile.Size = new Size(46, 24);
             fileToolStripFile.Text = "&File";
             // 
             // fileToolStripRestart
             // 
             fileToolStripRestart.Name = "fileToolStripRestart";
-            fileToolStripRestart.Size = new Size(168, 34);
+            fileToolStripRestart.Size = new Size(138, 26);
             fileToolStripRestart.Text = "&Restart";
             fileToolStripRestart.Click += fileToolStripRestart_Click;
             // 
             // fileToolStripExit
             // 
             fileToolStripExit.Name = "fileToolStripExit";
-            fileToolStripExit.Size = new Size(168, 34);
+            fileToolStripExit.Size = new Size(138, 26);
             fileToolStripExit.Text = "E&xit";
             fileToolStripExit.Click += fileToolStripExit_Click;
             // 
@@ -88,13 +89,13 @@
             // 
             helpToolStripHelp.DropDownItems.AddRange(new ToolStripItem[] { helpToolStripAbout });
             helpToolStripHelp.Name = "helpToolStripHelp";
-            helpToolStripHelp.Size = new Size(65, 29);
+            helpToolStripHelp.Size = new Size(55, 24);
             helpToolStripHelp.Text = "&Help";
             // 
             // helpToolStripAbout
             // 
             helpToolStripAbout.Name = "helpToolStripAbout";
-            helpToolStripAbout.Size = new Size(164, 34);
+            helpToolStripAbout.Size = new Size(133, 26);
             helpToolStripAbout.Text = "&About";
             helpToolStripAbout.Click += helpToolStripAbout_Click;
             // 
@@ -102,9 +103,10 @@
             // 
             statusStrip.ImageScalingSize = new Size(24, 24);
             statusStrip.Items.AddRange(new ToolStripItem[] { statusStripStatusLbl, statusStripProgressBar });
-            statusStrip.Location = new Point(0, 232);
+            statusStrip.Location = new Point(0, 186);
             statusStrip.Name = "statusStrip";
-            statusStrip.Size = new Size(478, 32);
+            statusStrip.Padding = new Padding(1, 0, 11, 0);
+            statusStrip.Size = new Size(372, 27);
             statusStrip.TabIndex = 1;
             statusStrip.Text = "statusStrip";
             // 
@@ -113,47 +115,51 @@
             statusStripStatusLbl.AutoSize = false;
             statusStripStatusLbl.Margin = new Padding(0, 4, 20, 3);
             statusStripStatusLbl.Name = "statusStripStatusLbl";
-            statusStripStatusLbl.Size = new Size(330, 25);
+            statusStripStatusLbl.Size = new Size(250, 20);
             statusStripStatusLbl.Text = "Ready";
             statusStripStatusLbl.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // statusStripProgressBar
             // 
             statusStripProgressBar.Name = "statusStripProgressBar";
-            statusStripProgressBar.Size = new Size(100, 24);
+            statusStripProgressBar.Size = new Size(80, 19);
             // 
             // label1
             // 
             label1.AutoSize = true;
-            label1.Location = new Point(12, 52);
+            label1.Location = new Point(10, 42);
+            label1.Margin = new Padding(2, 0, 2, 0);
             label1.Name = "label1";
-            label1.Size = new Size(107, 25);
+            label1.Size = new Size(88, 20);
             label1.TabIndex = 2;
             label1.Text = "Choose File:";
             // 
             // label2
             // 
             label2.AutoSize = true;
-            label2.Location = new Point(12, 94);
+            label2.Location = new Point(10, 75);
+            label2.Margin = new Padding(2, 0, 2, 0);
             label2.Name = "label2";
-            label2.Size = new Size(128, 25);
+            label2.Size = new Size(104, 20);
             label2.TabIndex = 3;
             label2.Text = "Output Folder:";
             // 
             // label3
             // 
             label3.AutoSize = true;
-            label3.Location = new Point(12, 139);
+            label3.Location = new Point(10, 111);
+            label3.Margin = new Padding(2, 0, 2, 0);
             label3.Name = "label3";
-            label3.Size = new Size(72, 25);
+            label3.Size = new Size(59, 20);
             label3.TabIndex = 4;
             label3.Text = "Quality:";
             // 
             // btnSelectInput
             // 
-            btnSelectInput.Location = new Point(125, 47);
+            btnSelectInput.Location = new Point(100, 38);
+            btnSelectInput.Margin = new Padding(2);
             btnSelectInput.Name = "btnSelectInput";
-            btnSelectInput.Size = new Size(112, 34);
+            btnSelectInput.Size = new Size(90, 27);
             btnSelectInput.TabIndex = 5;
             btnSelectInput.Text = "Browse...";
             btnSelectInput.UseVisualStyleBackColor = true;
@@ -161,16 +167,18 @@
             // 
             // txtOutputDir
             // 
-            txtOutputDir.Location = new Point(146, 91);
+            txtOutputDir.Location = new Point(117, 73);
+            txtOutputDir.Margin = new Padding(2);
             txtOutputDir.Name = "txtOutputDir";
-            txtOutputDir.Size = new Size(150, 31);
+            txtOutputDir.Size = new Size(121, 27);
             txtOutputDir.TabIndex = 6;
             // 
             // btnSelectOutputDir
             // 
-            btnSelectOutputDir.Location = new Point(302, 89);
+            btnSelectOutputDir.Location = new Point(242, 71);
+            btnSelectOutputDir.Margin = new Padding(2);
             btnSelectOutputDir.Name = "btnSelectOutputDir";
-            btnSelectOutputDir.Size = new Size(112, 34);
+            btnSelectOutputDir.Size = new Size(90, 27);
             btnSelectOutputDir.TabIndex = 7;
             btnSelectOutputDir.Text = "Browse";
             btnSelectOutputDir.UseVisualStyleBackColor = true;
@@ -179,10 +187,11 @@
             // qualityTrackbar
             // 
             qualityTrackbar.LargeChange = 10;
-            qualityTrackbar.Location = new Point(86, 139);
+            qualityTrackbar.Location = new Point(69, 111);
+            qualityTrackbar.Margin = new Padding(2);
             qualityTrackbar.Maximum = 100;
             qualityTrackbar.Name = "qualityTrackbar";
-            qualityTrackbar.Size = new Size(279, 69);
+            qualityTrackbar.Size = new Size(223, 56);
             qualityTrackbar.TabIndex = 8;
             qualityTrackbar.TickFrequency = 10;
             qualityTrackbar.Value = 80;
@@ -191,17 +200,19 @@
             // lblQualityPercent
             // 
             lblQualityPercent.AutoSize = true;
-            lblQualityPercent.Location = new Point(367, 139);
+            lblQualityPercent.Location = new Point(294, 111);
+            lblQualityPercent.Margin = new Padding(2, 0, 2, 0);
             lblQualityPercent.Name = "lblQualityPercent";
-            lblQualityPercent.Size = new Size(47, 25);
+            lblQualityPercent.Size = new Size(37, 20);
             lblQualityPercent.TabIndex = 9;
             lblQualityPercent.Text = "80%";
             // 
             // btnStart
             // 
-            btnStart.Location = new Point(190, 180);
+            btnStart.Location = new Point(152, 144);
+            btnStart.Margin = new Padding(2);
             btnStart.Name = "btnStart";
-            btnStart.Size = new Size(112, 34);
+            btnStart.Size = new Size(90, 27);
             btnStart.TabIndex = 10;
             btnStart.Text = "Start";
             btnStart.UseVisualStyleBackColor = true;
@@ -213,18 +224,19 @@
             chkRemoveMetadata.Checked = true;
             chkRemoveMetadata.CheckState = CheckState.Checked;
             chkRemoveMetadata.Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            chkRemoveMetadata.Location = new Point(302, 52);
+            chkRemoveMetadata.Location = new Point(217, 41);
+            chkRemoveMetadata.Margin = new Padding(2);
             chkRemoveMetadata.Name = "chkRemoveMetadata";
-            chkRemoveMetadata.Size = new Size(162, 25);
+            chkRemoveMetadata.Size = new Size(143, 23);
             chkRemoveMetadata.TabIndex = 11;
             chkRemoveMetadata.Text = "Remove Metadata";
             chkRemoveMetadata.UseVisualStyleBackColor = true;
             // 
             // MainWin
             // 
-            AutoScaleDimensions = new SizeF(10F, 25F);
+            AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(478, 264);
+            ClientSize = new Size(372, 213);
             Controls.Add(chkRemoveMetadata);
             Controls.Add(btnStart);
             Controls.Add(lblQualityPercent);
@@ -239,6 +251,7 @@
             Controls.Add(menuStrip1);
             Icon = (Icon)resources.GetObject("$this.Icon");
             MainMenuStrip = menuStrip1;
+            Margin = new Padding(2);
             Name = "MainWin";
             Text = "Jpeg Compressor CS";
             menuStrip1.ResumeLayout(false);
