@@ -47,6 +47,7 @@
             qualityTrackbar = new TrackBar();
             lblQualityPercent = new Label();
             btnStart = new Button();
+            chkRemoveMetadata = new CheckBox();
             menuStrip1.SuspendLayout();
             statusStrip.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)qualityTrackbar).BeginInit();
@@ -206,11 +207,25 @@
             btnStart.UseVisualStyleBackColor = true;
             btnStart.Click += btnStart_Click;
             // 
+            // chkRemoveMetadata
+            // 
+            chkRemoveMetadata.AutoSize = true;
+            chkRemoveMetadata.Checked = true;
+            chkRemoveMetadata.CheckState = CheckState.Checked;
+            chkRemoveMetadata.Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            chkRemoveMetadata.Location = new Point(302, 52);
+            chkRemoveMetadata.Name = "chkRemoveMetadata";
+            chkRemoveMetadata.Size = new Size(162, 25);
+            chkRemoveMetadata.TabIndex = 11;
+            chkRemoveMetadata.Text = "Remove Metadata";
+            chkRemoveMetadata.UseVisualStyleBackColor = true;
+            // 
             // MainWin
             // 
             AutoScaleDimensions = new SizeF(10F, 25F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(478, 264);
+            Controls.Add(chkRemoveMetadata);
             Controls.Add(btnStart);
             Controls.Add(lblQualityPercent);
             Controls.Add(qualityTrackbar);
@@ -255,5 +270,6 @@
         private TrackBar qualityTrackbar;
         private Label lblQualityPercent;
         private Button btnStart;
+        private CheckBox chkRemoveMetadata;
     }
 }

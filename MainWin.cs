@@ -7,22 +7,193 @@ namespace JpegCompressorCS
 {
     public partial class MainWin : Form
     {
-        public static string InputFile = string.Empty;
-        public static string OutputFile = string.Empty;
-        public static string OutputDirectory = string.Empty;
-        public static int Quality = 80;
+        private string InputFile = string.Empty;
+        private string OutputDirectory = string.Empty;
+        private int Quality = 80;
+        private bool RemoveMetadata = true;
+
+        // Drag-and-drop related fields
+        private Panel? dragDropOverlay;
+        private Label? dragDropOverlayLabel;
+
+        private readonly Color normalBackColor = SystemColors.Control;
+        private readonly Color dragActiveBackColor = Color.FromArgb(232, 244, 255);
+        private readonly Color dragBorderColor = Color.FromArgb(0, 120, 212);
 
         public MainWin()
         {
             InitializeComponent();
+            chkRemoveMetadata.Checked = RemoveMetadata;
+            InitializeDragDropFeature();
+        }
+
+        private void InitializeDragDropFeature()
+        {
+            AllowDrop = true;
+
+            DragEnter += MainWin_DragEnter;
+            DragOver += MainWin_DragOver;
+            DragLeave += MainWin_DragLeave;
+            DragDrop += MainWin_DragDrop;
+
+            dragDropOverlay = new Panel
+            {
+                Visible = false,
+                BackColor = dragActiveBackColor,
+                BorderStyle = BorderStyle.FixedSingle,
+                Width = ClientSize.Width - 32,
+                Height = ClientSize.Height - menuStrip1.Height - statusStrip.Height - 32,
+                Left = 16,
+                Top = menuStrip1.Height + 16,
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            };
+
+            dragDropOverlayLabel = new Label
+            {
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font(Font.FontFamily, 14F, FontStyle.Bold),
+                ForeColor = dragBorderColor,
+                Text = "Drop JPEG file here"
+            };
+
+            dragDropOverlay.Controls.Add(dragDropOverlayLabel);
+
+            Controls.Add(dragDropOverlay);
+            dragDropOverlay.BringToFront();
         }
 
         // Launches AboutBox when the "About" menu item is clicked
-        private void helpToolStripAbout_Click(object sender, EventArgs e)
+        private void helpToolStripAbout_Click(object? sender, EventArgs e)
         {
             using (AboutBox about = new AboutBox())
             {
                 about.ShowDialog(this);
+            }
+        }
+
+
+        private void MainWin_DragEnter(object? sender, DragEventArgs e)
+        {
+            if (IsValidJpegDrag(e))
+            {
+                e.Effect = DragDropEffects.Copy;
+                ShowDragDropOverlay(true);
+                statusStripStatusLbl.Text = "Release to select JPEG file.";
+            }
+            else
+            {
+                e.Effect = DragDropEffects.None;
+                ShowDragDropOverlay(false);
+                statusStripStatusLbl.Text = "Only JPEG files are supported.";
+            }
+        }
+
+        private void MainWin_DragOver(object? sender, DragEventArgs e)
+        {
+            if (IsValidJpegDrag(e))
+            {
+                e.Effect = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.Effect = DragDropEffects.None;
+            }
+        }
+
+        private void MainWin_DragLeave(object? sender, EventArgs e)
+        {
+            ShowDragDropOverlay(false);
+            statusStripStatusLbl.Text = "Ready";
+        }
+
+        private void MainWin_DragDrop(object? sender, DragEventArgs e)
+        {
+            ShowDragDropOverlay(false);
+
+            if (!IsValidJpegDrag(e))
+            {
+                statusStripStatusLbl.Text = "Error: Only JPEG files are supported.";
+                return;
+            }
+
+            string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
+
+            if (files == null || files.Length == 0)
+            {
+                statusStripStatusLbl.Text = "Error: No file was dropped.";
+                return;
+            }
+
+            string droppedFile = files[0];
+
+            if (!IsJpegFile(droppedFile))
+            {
+                statusStripStatusLbl.Text = "Error: Only .jpg and .jpeg files are supported.";
+                return;
+            }
+
+            InputFile = droppedFile;
+            //txtInputFile.Text = InputFile;
+
+            statusStripStatusLbl.Text = "JPEG file selected by drag and drop.";
+        }
+
+        private void chkRemoveMetadata_CheckedChanged(object sender, EventArgs e)
+        {            
+            RemoveMetadata = chkRemoveMetadata.Checked;
+        }
+
+
+        private bool IsValidJpegDrag(DragEventArgs e)
+        {
+            IDataObject? dataObject = e.Data;
+
+            if (dataObject == null)
+                return false;
+
+            if (!dataObject.GetDataPresent(DataFormats.FileDrop))
+                return false;
+
+            string[]? files = dataObject.GetData(DataFormats.FileDrop) as string[];
+
+            if (files == null || files.Length == 0)
+                return false;
+
+            return IsJpegFile(files[0]);
+        }
+
+
+        private bool IsJpegFile(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                return false;
+
+            if (!File.Exists(filePath))
+                return false;
+
+            string extension = Path.GetExtension(filePath);
+
+            return extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ShowDragDropOverlay(bool show)
+        {
+            if (dragDropOverlay == null)
+                return;
+
+            dragDropOverlay.Visible = show;
+
+            if (show)
+            {
+                dragDropOverlay.BringToFront();
+                BackColor = dragActiveBackColor;
+            }
+            else
+            {
+                BackColor = normalBackColor;
             }
         }
 
@@ -116,10 +287,12 @@ namespace JpegCompressorCS
             {
                 await Task.Run(() =>
                 {
-                    CompressJpeg(InputFile, OutputDirectory, Quality);
+                    CompressJpeg(InputFile, OutputDirectory, Quality, RemoveMetadata);
                 });
 
-                statusStripStatusLbl.Text = "Compression completed successfully.";
+                statusStripStatusLbl.Text = RemoveMetadata
+                    ? "Compression completed successfully. Metadata removed."
+                       : "Compression completed successfully.";
             }
             catch (Exception ex)
             {
@@ -133,26 +306,52 @@ namespace JpegCompressorCS
         }
 
         // CompressJpeg Files
-        private void CompressJpeg(string inputPath, string outputDir, int quality)
+        private void CompressJpeg(string inputPath, string outputDir, int quality, bool removeMetadata)
         {
-            using (Bitmap bitmap = new Bitmap(inputPath))
+            using Bitmap bitmap = new Bitmap(inputPath);
+
+            if (removeMetadata)
             {
-                ImageCodecInfo jpegCodec = ImageCodecInfo
-                    .GetImageEncoders()
-                    .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+                StripExifData(bitmap);
+            }
 
-                EncoderParameters encoderParams = new EncoderParameters(1);
-                encoderParams.Param[0] = new EncoderParameter(
-                    System.Drawing.Imaging.Encoder.Quality,
-                    quality
-                );
+            ImageCodecInfo jpegCodec = ImageCodecInfo
+                .GetImageEncoders()
+                .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
 
-                string outputFileName =
-                    Path.GetFileNameWithoutExtension(inputPath) + "_mini.jpg";
+            using EncoderParameters encoderParams = new EncoderParameters(1);
+            encoderParams.Param[0] = new EncoderParameter(
+                System.Drawing.Imaging.Encoder.Quality,
+                quality);
 
-                string outputPath = Path.Combine(outputDir, outputFileName);
+            string outputFile =
+                Path.GetFileNameWithoutExtension(inputPath) + "_mini.jpg";
 
-                bitmap.Save(outputPath, jpegCodec, encoderParams);
+            string outputPath = Path.Combine(outputDir, outputFile);
+
+            bitmap.Save(outputPath, jpegCodec, encoderParams);
+        }
+
+        // Remove metadata for non-protected properties on the image file
+        private void StripExifData(Image image)
+        {
+            if (image == null)
+                return;
+
+            // Copy property IDs first because removing items modifies the collection
+            int[] propertyIds = image.PropertyIdList.ToArray();
+
+            foreach (int propertyId in propertyIds)
+            {
+                try
+                {
+                    image.RemovePropertyItem(propertyId);
+                }
+                catch
+                {
+                    // Some images/codecs may reject removal of certain properties.
+                    // Ignore safely and continue removing the rest.
+                }
             }
         }
     }
