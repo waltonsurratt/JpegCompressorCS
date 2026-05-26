@@ -20,6 +20,9 @@ namespace JpegCompressorCS
         private readonly Color dragActiveBackColor = Color.FromArgb(232, 244, 255);
         private readonly Color dragBorderColor = Color.FromArgb(0, 120, 212);
 
+        // Batch processing support
+        private List<string> InputFiles = new List<string>();
+
         public MainWin()
         {
             InitializeComponent();
@@ -114,32 +117,26 @@ namespace JpegCompressorCS
         {
             ShowDragDropOverlay(false);
 
-            if (!IsValidJpegDrag(e))
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop))
             {
-                statusStripStatusLbl.Text = "Error: Only JPEG files are supported.";
+                statusStripStatusLbl.Text = "Error: No files detected.";
                 return;
             }
 
-            string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
+            string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
 
-            if (files == null || files.Length == 0)
+            InputFiles = files
+                .Where(f => IsJpegFile(f))
+                .ToList();
+
+            if (InputFiles.Count == 0)
             {
-                statusStripStatusLbl.Text = "Error: No file was dropped.";
+                statusStripStatusLbl.Text = "Error: No valid JPEG files.";
                 return;
             }
 
-            string droppedFile = files[0];
-
-            if (!IsJpegFile(droppedFile))
-            {
-                statusStripStatusLbl.Text = "Error: Only .jpg and .jpeg files are supported.";
-                return;
-            }
-
-            InputFile = droppedFile;
-            //txtInputFile.Text = InputFile;
-
-            statusStripStatusLbl.Text = "JPEG file selected by drag and drop.";
+            statusStripStatusLbl.Text =
+                $"Loaded {InputFiles.Count} file(s) via drag-and-drop.";
         }
 
         private void chkRemoveMetadata_CheckedChanged(object sender, EventArgs e)
@@ -215,21 +212,20 @@ namespace JpegCompressorCS
         // Placeholder for btnSelectInput click event handler
         private void btnSelectInput_Click(object sender, EventArgs e)
         {
-
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
-                ofd.Title = "Select a JPEG Image";
+                ofd.Title = "Select JPEG Image(s)";
                 ofd.Filter = "JPEG Images (*.jpg;*.jpeg;*.jpe)|*.jpg;*.jpeg;*.jpe";
-                ofd.Multiselect = false;
+                ofd.Multiselect = true; // ✅ Enable batch selection
                 ofd.CheckFileExists = true;
                 ofd.CheckPathExists = true;
 
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
-                    InputFile = ofd.FileName;
+                    InputFiles = ofd.FileNames.ToList();
 
-                    // ✅ Update StatusStrip label with full path + filename
-                    statusStripStatusLbl.Text = $"Loaded file: {InputFile}";
+                    statusStripStatusLbl.Text =
+                        $"Loaded {InputFiles.Count} file(s).";
                 }
             }
         }
@@ -265,14 +261,14 @@ namespace JpegCompressorCS
         // Compress file when user clicks Start button
         private async void btnStart_Click(object sender, EventArgs e)
         {
-            // Input validation
-            if (string.IsNullOrWhiteSpace(InputFile))
+            if (InputFiles == null || InputFiles.Count == 0)
             {
-                statusStripStatusLbl.Text = "Error: No input file selected.";
+                statusStripStatusLbl.Text = "Error: No input files selected.";
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(txtOutputDir.Text) || !Directory.Exists(txtOutputDir.Text))
+            if (string.IsNullOrWhiteSpace(txtOutputDir.Text) ||
+                !Directory.Exists(txtOutputDir.Text))
             {
                 statusStripStatusLbl.Text = "Error: No valid output directory selected.";
                 return;
@@ -280,7 +276,6 @@ namespace JpegCompressorCS
 
             btnStart.Enabled = false;
             statusStripProgressBar.Style = ProgressBarStyle.Marquee;
-            statusStripStatusLbl.Text = "Compressing JPEG...";
 
             Quality = qualityTrackbar.Value;
             OutputDirectory = txtOutputDir.Text;
@@ -289,12 +284,17 @@ namespace JpegCompressorCS
             {
                 await Task.Run(() =>
                 {
-                    CompressJpeg(InputFile, OutputDirectory, Quality, RemoveMetadata);
+                    int count = 0;
+
+                    foreach (var file in InputFiles)
+                    {
+                        CompressJpeg(file, OutputDirectory, Quality, RemoveMetadata);
+                        count++;
+                    }
                 });
 
-                statusStripStatusLbl.Text = RemoveMetadata
-                    ? "Compression completed successfully. Metadata removed."
-                       : "Compression completed successfully.";
+                statusStripStatusLbl.Text =
+                    $"Batch complete: {InputFiles.Count} file(s) compressed.";
             }
             catch (Exception ex)
             {
@@ -330,6 +330,17 @@ namespace JpegCompressorCS
                 Path.GetFileNameWithoutExtension(inputPath) + "_mini.jpg";
 
             string outputPath = Path.Combine(outputDir, outputFile);
+
+            // ✅ Ensure unique filename
+            int i = 1;
+            while (File.Exists(outputPath))
+            {
+                outputFile =
+                    Path.GetFileNameWithoutExtension(inputPath) + $"_mini_{i}.jpg";
+                outputPath = Path.Combine(outputDir, outputFile);
+                i++;
+            }
+
 
             bitmap.Save(outputPath, jpegCodec, encoderParams);
         }
