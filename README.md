@@ -3,14 +3,13 @@ This a new project for a native, Windows-based application written in C# that co
 
 # Version: 1.2.0
 The tool currently includes the following features (initial release):
-* ~~Single-file processing~~
 * Batch file processing
 * Error handling for non-JPEG files
 * File overwrite behavior
 * Image Quality slider bar (linked to compression rate)
 * Modern UI Design
-
-<img width="244" height="158" alt="image" src="https://github.com/user-attachments/assets/4aff9312-2fc8-417f-8739-d74d72c6d96a" />
+* 
+<img width="397" height="277" alt="image" src="https://github.com/user-attachments/assets/1ab39564-565c-49a3-82aa-6a9f6ba3853c" />
 
 ## Future Changes (Planned)
 * Cancellation support / Cancel Button (after compression process begins)
