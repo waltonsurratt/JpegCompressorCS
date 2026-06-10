@@ -107,6 +107,7 @@
             statusStrip.Name = "statusStrip";
             statusStrip.Padding = new Padding(1, 0, 11, 0);
             statusStrip.Size = new Size(372, 27);
+            statusStrip.SizingGrip = false;
             statusStrip.TabIndex = 1;
             statusStrip.Text = "statusStrip";
             // 
@@ -122,7 +123,7 @@
             // statusStripProgressBar
             // 
             statusStripProgressBar.Name = "statusStripProgressBar";
-            statusStripProgressBar.Size = new Size(80, 19);
+            statusStripProgressBar.Size = new Size(90, 19);
             // 
             // label1
             // 
