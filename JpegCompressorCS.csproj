@@ -18,6 +18,7 @@
     <ApplicationIcon>JpegCompressor.ico</ApplicationIcon>
     <Platforms>AnyCPU</Platforms>
     <PlatformTarget>AnyCPU</PlatformTarget>
+	<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
