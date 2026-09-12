@@ -169,7 +169,7 @@ namespace JpegCompressorCS
             }
             finally
             {
-                _cts.Dispose();
+                _cts?.Dispose();
                 _cts = null;
                 btnStart.Text = "Start";
                 statusStripProgressBar.Value = 0;
@@ -269,15 +269,18 @@ namespace JpegCompressorCS
         // ==============================
         // DRAG + DROP
         // ==============================
-        private void MainWin_DragEnter(object sender, DragEventArgs e)
+        private void MainWin_DragEnter(object? sender, DragEventArgs e)
         {
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
                 e.Effect = DragDropEffects.Copy;
         }
 
-        private void MainWin_DragDrop(object sender, DragEventArgs e)
+        private void MainWin_DragDrop(object? sender, DragEventArgs e)
         {
-            string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            string[]? files = e.Data?.GetData(DataFormats.FileDrop) as string[];
+
+            if (files is null)
+                return;
 
             List<string> dropped = files
                 .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
