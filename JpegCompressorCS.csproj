@@ -16,6 +16,8 @@
     <PackageIcon>JpegCompressor.ico</PackageIcon>
     <Version>1.2.1</Version>
     <ApplicationIcon>JpegCompressor.ico</ApplicationIcon>
+    <Platforms>AnyCPU</Platforms>
+    <PlatformTarget>AnyCPU</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>

@@ -12,6 +12,7 @@ namespace JpegCompressorCS
         private string OutputDirectory = string.Empty;
         private int Quality = 80;
         private bool RemoveMetadata = true;
+        private CancellationTokenSource? _cts;
 
         public MainWin()
         {
@@ -80,10 +81,18 @@ namespace JpegCompressorCS
         }
 
         // ==============================
-        // START PROCESSING
+        // START / CANCEL TOGGLE
         // ==============================
         private async void btnStart_Click(object sender, EventArgs e)
         {
+            // ── CANCEL branch ──────────────────────────────────────────
+            if (_cts != null)
+            {
+                _cts.Cancel();
+                return;
+            }
+
+            // ── START branch ───────────────────────────────────────────
             if (InputFiles.Count == 0)
             {
                 statusStripStatusLbl.Text = "No files selected.";
@@ -97,19 +106,26 @@ namespace JpegCompressorCS
             }
 
             OutputDirectory = txtOutputDir.Text;
+            RemoveMetadata = chkRemoveMetadata.Checked;
 
-            btnStart.Enabled = false;
+            _cts = new CancellationTokenSource();
+            CancellationToken token = _cts.Token;
+
+            btnStart.Text = "Cancel";
 
             try
             {
+                int completed = 0;
+
                 for (int i = 0; i < InputFiles.Count; i++)
                 {
+                    token.ThrowIfCancellationRequested();
+
                     string file = InputFiles[i];
 
                     var progress = new Progress<int>(percent =>
                     {
                         statusStripProgressBar.Value = percent;
-
                         statusStripStatusLbl.Text =
                             $"File {i + 1}/{InputFiles.Count} - {percent}% - {Path.GetFileName(file)}";
                     });
@@ -120,11 +136,18 @@ namespace JpegCompressorCS
                             OutputDirectory,
                             Quality,
                             RemoveMetadata,
-                            progress));
+                            progress,
+                            token),
+                        token);
+
+                    completed++;
                 }
 
-                statusStripStatusLbl.Text =
-                    $"✅ Completed {InputFiles.Count} file(s)";
+                statusStripStatusLbl.Text = $"✅ Completed {completed} file(s)";
+            }
+            catch (OperationCanceledException)
+            {
+                statusStripStatusLbl.Text = "⛔ Cancelled.";
             }
             catch (Exception ex)
             {
@@ -132,8 +155,10 @@ namespace JpegCompressorCS
             }
             finally
             {
+                _cts.Dispose();
+                _cts = null;
+                btnStart.Text = "Start";
                 statusStripProgressBar.Value = 0;
-                btnStart.Enabled = true;
             }
         }
 
@@ -145,7 +170,8 @@ namespace JpegCompressorCS
             string outputDir,
             int finalQuality,
             bool removeMetadata,
-            IProgress<int> progress)
+            IProgress<int> progress,
+            CancellationToken token = default)
         {
             using Bitmap bitmap = new(inputPath);
 
@@ -172,6 +198,8 @@ namespace JpegCompressorCS
 
             for (int q = stepSize; q <= finalQuality; q += stepSize)
             {
+                token.ThrowIfCancellationRequested();
+
                 using EncoderParameters encParams = new(1);
                 encParams.Param[0] = new EncoderParameter(
                     System.Drawing.Imaging.Encoder.Quality, q);
@@ -184,7 +212,9 @@ namespace JpegCompressorCS
                 progress.Report(percent);
             }
 
-            // ✅ Final write to disk
+            // ✅ Final write to disk — skipped if cancelled mid-loop
+            token.ThrowIfCancellationRequested();
+
             using EncoderParameters finalParams = new(1);
             finalParams.Param[0] = new EncoderParameter(
                 System.Drawing.Imaging.Encoder.Quality, finalQuality);
