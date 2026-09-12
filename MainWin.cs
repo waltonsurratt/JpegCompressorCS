@@ -2,12 +2,14 @@
 // Developer:   Walton Surratt
 // Copyright (c) 2026 Surratt Solutions. All rights reserved.
 
-using System.Drawing.Imaging;
+using MozJpegSharp;
 
 namespace JpegCompressorCS
 {
     public partial class MainWin : Form
     {
+        private const int MaxFiles = 16_384;
+
         private List<string> InputFiles = new();
         private string OutputDirectory = string.Empty;
         private int Quality = 80;
@@ -60,8 +62,20 @@ namespace JpegCompressorCS
 
             if (ofd.ShowDialog() == DialogResult.OK)
             {
-                InputFiles = ofd.FileNames.ToList();
-                statusStripStatusLbl.Text = $"Loaded {InputFiles.Count} file(s)";
+                List<string> selected = ofd.FileNames.ToList();
+
+                if (selected.Count > MaxFiles)
+                {
+                    InputFiles = selected.Take(MaxFiles).ToList();
+                    statusStripStatusLbl.Text =
+                        $"Loaded {MaxFiles:N0} file(s) — limit reached " +
+                        $"({selected.Count - MaxFiles:N0} file(s) ignored)";
+                }
+                else
+                {
+                    InputFiles = selected;
+                    statusStripStatusLbl.Text = $"Loaded {InputFiles.Count} file(s)";
+                }
             }
         }
 
@@ -163,65 +177,81 @@ namespace JpegCompressorCS
         }
 
         // ==============================
-        // REAL-TIME COMPRESSION
+        // MOZJPEG COMPRESSION
         // ==============================
         private void CompressJpegWithProgress(
             string inputPath,
             string outputDir,
-            int finalQuality,
+            int quality,
             bool removeMetadata,
             IProgress<int> progress,
             CancellationToken token = default)
         {
-            using Bitmap bitmap = new(inputPath);
-
-            if (removeMetadata)
-                StripExifData(bitmap);
-
-            ImageCodecInfo jpegCodec = ImageCodecInfo
-                .GetImageEncoders()
-                .First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-
-            string baseName = Path.GetFileNameWithoutExtension(inputPath);
-            string outputPath = Path.Combine(outputDir, $"{baseName}_mini.jpg");
-
-            int dup = 1;
-            while (File.Exists(outputPath))
-            {
-                outputPath = Path.Combine(outputDir, $"{baseName}_mini_{dup}.jpg");
-                dup++;
-            }
-
-            // ✅ REAL-TIME PROGRESS SIMULATION
-            const int steps = 20;
-            int stepSize = Math.Max(1, finalQuality / steps);
-
-            for (int q = stepSize; q <= finalQuality; q += stepSize)
-            {
-                token.ThrowIfCancellationRequested();
-
-                using EncoderParameters encParams = new(1);
-                encParams.Param[0] = new EncoderParameter(
-                    System.Drawing.Imaging.Encoder.Quality, q);
-
-                using MemoryStream ms = new();
-
-                bitmap.Save(ms, jpegCodec, encParams);
-
-                int percent = (int)((q / (double)finalQuality) * 100);
-                progress.Report(percent);
-            }
-
-            // ✅ Final write to disk — skipped if cancelled mid-loop
+            // Phase 1 — Load (0 → 25%)
+            progress.Report(0);
+            using Bitmap source = new(inputPath);
             token.ThrowIfCancellationRequested();
+            progress.Report(25);
 
-            using EncoderParameters finalParams = new(1);
-            finalParams.Param[0] = new EncoderParameter(
-                System.Drawing.Imaging.Encoder.Quality, finalQuality);
+            // Phase 2 — Normalise pixel format.
+            // MozJpegSharp only accepts 24bpp RGB; some JPEGs decode to
+            // 32bpp ARGB or indexed colour, so we redraw into a safe format.
+            Bitmap bitmap;
+            if (source.PixelFormat == System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+            {
+                bitmap = source;
+            }
+            else
+            {
+                bitmap = new Bitmap(source.Width, source.Height,
+                    System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                using Graphics g = Graphics.FromImage(bitmap);
+                g.DrawImage(source, 0, 0, source.Width, source.Height);
+            }
 
-            bitmap.Save(outputPath, jpegCodec, finalParams);
+            try
+            {
+                // Phase 3 — Strip EXIF metadata (40%)
+                if (removeMetadata)
+                    StripExifData(bitmap);
+                token.ThrowIfCancellationRequested();
+                progress.Report(40);
 
-            progress.Report(100);
+                // Phase 4 — MozJPEG encode (40 → 90%)
+                // TJSubsamplingOption.Chrominance420 (4:2:0) gives the best
+                // size reduction; TJFlags.None lets MozJPEG apply its own
+                // optimised Huffman tables and trellis quantisation.
+                using TJCompressor compressor = new();
+                byte[] compressed = compressor.Compress(
+                    bitmap,
+                    TJSubsamplingOption.Chrominance420,
+                    quality,
+                    TJFlags.None);
+
+                token.ThrowIfCancellationRequested();
+                progress.Report(90);
+
+                // Phase 5 — Write to disk (90 → 100%)
+                string baseName = Path.GetFileNameWithoutExtension(inputPath);
+                string outputPath = Path.Combine(outputDir, $"{baseName}_mini.jpg");
+
+                int dup = 1;
+                while (File.Exists(outputPath))
+                {
+                    outputPath = Path.Combine(outputDir, $"{baseName}_mini_{dup}.jpg");
+                    dup++;
+                }
+
+                token.ThrowIfCancellationRequested();
+                File.WriteAllBytes(outputPath, compressed);
+                progress.Report(100);
+            }
+            finally
+            {
+                // Dispose the normalised copy only if we created a new one
+                if (!ReferenceEquals(bitmap, source))
+                    bitmap.Dispose();
+            }
         }
 
         // ==============================
@@ -249,13 +279,24 @@ namespace JpegCompressorCS
         {
             string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
 
-            InputFiles = files
+            List<string> dropped = files
                 .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
                             f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            statusStripStatusLbl.Text =
-                $"Loaded {InputFiles.Count} file(s) via drag-drop";
+            if (dropped.Count > MaxFiles)
+            {
+                InputFiles = dropped.Take(MaxFiles).ToList();
+                statusStripStatusLbl.Text =
+                    $"Loaded {MaxFiles:N0} file(s) via drag-drop — limit reached " +
+                    $"({dropped.Count - MaxFiles:N0} file(s) ignored)";
+            }
+            else
+            {
+                InputFiles = dropped;
+                statusStripStatusLbl.Text =
+                    $"Loaded {InputFiles.Count} file(s) via drag-drop";
+            }
         }
     }
 }
