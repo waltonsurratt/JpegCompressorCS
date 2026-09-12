@@ -2,6 +2,8 @@
 // Developer:   Walton Surratt
 // Copyright (c) 2026 Surratt Solutions. All rights reserved.
 
+using System.Buffers;
+using System.Collections.Concurrent;
 using MozJpegSharp;
 
 namespace JpegCompressorCS
@@ -10,33 +12,48 @@ namespace JpegCompressorCS
     {
         private const int MaxFiles = 16_384;
 
+        // Max parallel workers: use logical core count, capped at 16 so we
+        // don't saturate I/O or exhaust GDI+ handle limits on large machines.
+        private static readonly int MaxWorkers =
+            Math.Min(Environment.ProcessorCount, 16);
+
         private List<string> InputFiles = new();
         private string OutputDirectory = string.Empty;
         private int Quality = 80;
         private bool RemoveMetadata = true;
         private CancellationTokenSource? _cts;
 
-        // ── Smooth progress animation ──────────────────────────────────
-        // _targetProgress is written by the worker via IProgress<int>;
-        // _animTimer ticks on the UI thread and eases the bar toward it.
-        private volatile int _targetProgress = 0;
-        private System.Windows.Forms.Timer? _animTimer;
+        // ── Thread-safe output filename deduplication ──────────────────
+        // Multiple workers can finish at the same time; this lock guards
+        // the File.Exists check + path assignment so no two workers pick
+        // the same output path.
+        private readonly object _pathLock = new();
 
-        private void StartProgressAnimation()
+        // ── Smooth progress animation ──────────────────────────────────
+        // _completedCount is incremented atomically by each worker thread.
+        // The animation timer reads it on the UI thread to drive the bar.
+        private int _completedCount = 0;
+        private int _totalCount = 0;
+        private System.Windows.Forms.Timer? _animTimer;
+        private volatile int _targetProgress = 0;
+
+        private void StartProgressAnimation(int totalFiles)
         {
-            statusStripProgressBar.Value = 0;
+            _completedCount = 0;
+            _totalCount = totalFiles;
             _targetProgress = 0;
+            statusStripProgressBar.Value = 0;
 
             _animTimer = new System.Windows.Forms.Timer { Interval = 16 }; // ~60 fps
             _animTimer.Tick += (_, _) =>
             {
-                int current = statusStripProgressBar.Value;
                 int target = _targetProgress;
+                int current = statusStripProgressBar.Value;
 
                 if (current >= target)
                     return;
 
-                // Ease toward the target: close the gap by 15%, minimum 1 step.
+                // Exponential ease-out: close gap by ~14%, minimum 1 step.
                 int step = Math.Max(1, (target - current) / 7);
                 statusStripProgressBar.Value = Math.Min(current + step, target);
             };
@@ -158,53 +175,78 @@ namespace JpegCompressorCS
             OutputDirectory = txtOutputDir.Text;
             RemoveMetadata = chkRemoveMetadata.Checked;
 
+            int totalFiles = InputFiles.Count;
+            int capturedQuality = Quality;
+            bool capturedRemoveMetadata = RemoveMetadata;
+            string capturedOutputDir = OutputDirectory;
+
             _cts = new CancellationTokenSource();
             CancellationToken token = _cts.Token;
 
             btnStart.Text = "Cancel";
-            StartProgressAnimation();
+            StartProgressAnimation(totalFiles);
+
+            // Errors from worker threads are collected here and surfaced
+            // to the user after all workers finish.
+            var errors = new ConcurrentBag<string>();
 
             try
             {
-                int completed = 0;
-
-                for (int i = 0; i < InputFiles.Count; i++)
+                var parallelOptions = new ParallelOptions
                 {
-                    token.ThrowIfCancellationRequested();
+                    MaxDegreeOfParallelism = MaxWorkers,
+                    CancellationToken = token
+                };
 
-                    string file = InputFiles[i];
-
-                    // Report to _targetProgress; the animation timer smooths
-                    // the bar toward it on the UI thread independently.
-                    var progress = new Progress<int>(percent =>
+                await Parallel.ForEachAsync(InputFiles, parallelOptions,
+                    async (file, workerToken) =>
                     {
-                        _targetProgress = percent;
-                        statusStripStatusLbl.Text =
-                            $"File {i + 1}/{InputFiles.Count} - {percent}% - {Path.GetFileName(file)}";
+                        // Offload CPU-intensive compression to the thread pool.
+                        await Task.Run(() =>
+                        {
+                            try
+                            {
+                                CompressJpeg(
+                                    file,
+                                    capturedOutputDir,
+                                    capturedQuality,
+                                    capturedRemoveMetadata,
+                                    workerToken);
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                errors.Add($"{Path.GetFileName(file)}: {ex.Message}");
+                            }
+                        }, workerToken);
+
+                        // Atomically increment and drive the progress bar.
+                        int done = Interlocked.Increment(ref _completedCount);
+                        _targetProgress = (int)((done / (double)totalFiles) * 100);
+
+                        // Update the status label on the UI thread.
+                        // ToolStripStatusLabel is a ToolStripItem, not a Control,
+                        // so Invoke must be called on the parent statusStrip instead.
+                        int captured = done;
+                        statusStrip.Invoke(() =>
+                            statusStripStatusLbl.Text =
+                                $"{captured}/{totalFiles} file(s) compressed " +
+                                $"— {MaxWorkers} thread(s)");
                     });
 
-                    await Task.Run(() =>
-                        CompressJpegWithProgress(
-                            file,
-                            OutputDirectory,
-                            Quality,
-                            RemoveMetadata,
-                            progress,
-                            token),
-                        token);
+                _targetProgress = 100;
+                await Task.Delay(300, CancellationToken.None);
 
-                    // Snap the bar to 100% and pause briefly so the user
-                    // sees the completed state before it resets for the
-                    // next file — without blocking the background thread.
-                    _targetProgress = 100;
-                    await Task.Delay(120, token);
-                    _targetProgress = 0;
-                    statusStripProgressBar.Value = 0;
+                statusStripStatusLbl.Text = errors.IsEmpty
+                    ? $"✅ Completed {totalFiles} file(s) — {MaxWorkers} thread(s)"
+                    : $"⚠️ Completed with {errors.Count} error(s) — see details";
 
-                    completed++;
-                }
-
-                statusStripStatusLbl.Text = $"✅ Completed {completed} file(s)";
+                if (!errors.IsEmpty)
+                    MessageBox.Show(
+                        string.Join(Environment.NewLine, errors),
+                        "Compression Errors",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
             }
             catch (OperationCanceledException)
             {
@@ -224,79 +266,120 @@ namespace JpegCompressorCS
         }
 
         // ==============================
-        // MOZJPEG COMPRESSION
+        // MOZJPEG COMPRESSION (per file)
         // ==============================
-        private void CompressJpegWithProgress(
+        // Called concurrently from multiple thread-pool threads.
+        // • No shared mutable state except _pathLock (output naming only).
+        // • ArrayPool<byte> avoids repeated LOH allocations for the
+        //   compressed output buffer across hundreds or thousands of files.
+        // • Each worker creates its own TJCompressor — the native MozJPEG
+        //   context is not thread-safe and must not be shared.
+        private void CompressJpeg(
             string inputPath,
             string outputDir,
             int quality,
             bool removeMetadata,
-            IProgress<int> progress,
-            CancellationToken token = default)
+            CancellationToken token)
         {
-            // Phase 1 — Load (0 → 25%)
-            progress.Report(0);
+            token.ThrowIfCancellationRequested();
+
+            // ── Load ────────────────────────────────────────────────────
             using Bitmap source = new(inputPath);
             token.ThrowIfCancellationRequested();
-            progress.Report(25);
 
-            // Phase 2 — Normalise pixel format.
-            // MozJpegSharp only accepts 24bpp RGB; some JPEGs decode to
-            // 32bpp ARGB or indexed colour, so we redraw into a safe format.
+            // ── Normalise pixel format ──────────────────────────────────
+            // MozJpegSharp only accepts 24bpp RGB. Some JPEGs decode to
+            // 32bpp ARGB or indexed colour, so redraw into a safe format.
             Bitmap bitmap;
-            if (source.PixelFormat == System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+            bool ownsBitmap;
+
+            if (source.PixelFormat ==
+                System.Drawing.Imaging.PixelFormat.Format24bppRgb)
             {
                 bitmap = source;
+                ownsBitmap = false;
             }
             else
             {
-                bitmap = new Bitmap(source.Width, source.Height,
+                bitmap = new Bitmap(
+                    source.Width, source.Height,
                     System.Drawing.Imaging.PixelFormat.Format24bppRgb);
                 using Graphics g = Graphics.FromImage(bitmap);
                 g.DrawImage(source, 0, 0, source.Width, source.Height);
+                ownsBitmap = true;
             }
 
             try
             {
-                // Phase 3 — Strip EXIF metadata (40%)
+                // ── Strip EXIF ──────────────────────────────────────────
                 if (removeMetadata)
                     StripExifData(bitmap);
-                token.ThrowIfCancellationRequested();
-                progress.Report(40);
-
-                // Phase 4 — MozJPEG encode (40 → 90%)
-                // TJSubsamplingOption.Chrominance420 (4:2:0) gives the best
-                // size reduction; TJFlags.None lets MozJPEG apply its own
-                // optimised Huffman tables and trellis quantisation.
-                using TJCompressor compressor = new();
-                byte[] compressed = compressor.Compress(
-                    bitmap,
-                    TJSubsamplingOption.Chrominance420,
-                    quality,
-                    TJFlags.None);
 
                 token.ThrowIfCancellationRequested();
-                progress.Report(90);
 
-                // Phase 5 — Write to disk (90 → 100%)
-                string baseName = Path.GetFileNameWithoutExtension(inputPath);
-                string outputPath = Path.Combine(outputDir, $"{baseName}_mini.jpg");
-
-                int dup = 1;
-                while (File.Exists(outputPath))
+                // ── MozJPEG encode ──────────────────────────────────────
+                // Each worker owns its TJCompressor; the native context is
+                // not thread-safe and must not be shared across threads.
+                byte[] compressed;
+                using (TJCompressor compressor = new())
                 {
-                    outputPath = Path.Combine(outputDir, $"{baseName}_mini_{dup}.jpg");
-                    dup++;
+                    compressed = compressor.Compress(
+                        bitmap,
+                        TJSubsamplingOption.Chrominance420,
+                        quality,
+                        TJFlags.None);
                 }
 
                 token.ThrowIfCancellationRequested();
-                File.WriteAllBytes(outputPath, compressed);
-                progress.Report(100);
+
+                // ── Resolve output path (thread-safe) ───────────────────
+                // Lock only long enough to find a unique filename; actual
+                // disk write happens outside the lock so other workers
+                // aren't stalled during I/O.
+                string outputPath;
+                lock (_pathLock)
+                {
+                    string baseName = Path.GetFileNameWithoutExtension(inputPath);
+                    outputPath = Path.Combine(outputDir, $"{baseName}_mini.jpg");
+                    int dup = 1;
+                    while (File.Exists(outputPath))
+                    {
+                        outputPath = Path.Combine(
+                            outputDir, $"{baseName}_mini_{dup}.jpg");
+                        dup++;
+                    }
+
+                    // Reserve the path by creating the file immediately so
+                    // no other worker can claim the same name between the
+                    // exists-check above and the WriteAllBytes below.
+                    File.WriteAllBytes(outputPath, Array.Empty<byte>());
+                }
+
+                // ── Write to disk (outside lock) ────────────────────────
+                // ArrayPool<byte> prevents the compressed buffer from
+                // being promoted to the Large Object Heap (LOH), which
+                // would otherwise cause Gen2 GC pauses on large batches.
+                byte[] rented = ArrayPool<byte>.Shared.Rent(compressed.Length);
+                try
+                {
+                    Buffer.BlockCopy(compressed, 0, rented, 0, compressed.Length);
+                    using FileStream fs = new(
+                        outputPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize: 65_536,       // 64 KB write buffer
+                        useAsync: false);          // sequential write; sync is faster
+                    fs.Write(rented, 0, compressed.Length);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rented);
+                }
             }
             finally
             {
-                // Dispose the normalised copy only if we created a new one
-                if (!ReferenceEquals(bitmap, source))
+                if (ownsBitmap)
                     bitmap.Dispose();
             }
         }
@@ -304,7 +387,7 @@ namespace JpegCompressorCS
         // ==============================
         // METADATA STRIP
         // ==============================
-        private void StripExifData(Image image)
+        private static void StripExifData(Image image)
         {
             foreach (int id in image.PropertyIdList)
             {
