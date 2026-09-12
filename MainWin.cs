@@ -16,6 +16,42 @@ namespace JpegCompressorCS
         private bool RemoveMetadata = true;
         private CancellationTokenSource? _cts;
 
+        // ── Smooth progress animation ──────────────────────────────────
+        // _targetProgress is written by the worker via IProgress<int>;
+        // _animTimer ticks on the UI thread and eases the bar toward it.
+        private volatile int _targetProgress = 0;
+        private System.Windows.Forms.Timer? _animTimer;
+
+        private void StartProgressAnimation()
+        {
+            statusStripProgressBar.Value = 0;
+            _targetProgress = 0;
+
+            _animTimer = new System.Windows.Forms.Timer { Interval = 16 }; // ~60 fps
+            _animTimer.Tick += (_, _) =>
+            {
+                int current = statusStripProgressBar.Value;
+                int target = _targetProgress;
+
+                if (current >= target)
+                    return;
+
+                // Ease toward the target: close the gap by 15%, minimum 1 step.
+                int step = Math.Max(1, (target - current) / 7);
+                statusStripProgressBar.Value = Math.Min(current + step, target);
+            };
+            _animTimer.Start();
+        }
+
+        private void StopProgressAnimation()
+        {
+            _animTimer?.Stop();
+            _animTimer?.Dispose();
+            _animTimer = null;
+            statusStripProgressBar.Value = 0;
+            _targetProgress = 0;
+        }
+
         public MainWin()
         {
             InitializeComponent();
@@ -126,6 +162,7 @@ namespace JpegCompressorCS
             CancellationToken token = _cts.Token;
 
             btnStart.Text = "Cancel";
+            StartProgressAnimation();
 
             try
             {
@@ -137,9 +174,11 @@ namespace JpegCompressorCS
 
                     string file = InputFiles[i];
 
+                    // Report to _targetProgress; the animation timer smooths
+                    // the bar toward it on the UI thread independently.
                     var progress = new Progress<int>(percent =>
                     {
-                        statusStripProgressBar.Value = percent;
+                        _targetProgress = percent;
                         statusStripStatusLbl.Text =
                             $"File {i + 1}/{InputFiles.Count} - {percent}% - {Path.GetFileName(file)}";
                     });
@@ -153,6 +192,14 @@ namespace JpegCompressorCS
                             progress,
                             token),
                         token);
+
+                    // Snap the bar to 100% and pause briefly so the user
+                    // sees the completed state before it resets for the
+                    // next file — without blocking the background thread.
+                    _targetProgress = 100;
+                    await Task.Delay(120, token);
+                    _targetProgress = 0;
+                    statusStripProgressBar.Value = 0;
 
                     completed++;
                 }
@@ -172,7 +219,7 @@ namespace JpegCompressorCS
                 _cts?.Dispose();
                 _cts = null;
                 btnStart.Text = "Start";
-                statusStripProgressBar.Value = 0;
+                StopProgressAnimation();
             }
         }
 
