@@ -13,7 +13,7 @@ namespace JpegCompressorCS
         {
             // Initialize the about box to display the product information from the assembly information.
             this.lblProductName.Text = "JPEG Compressor CS";
-            this.lblVersion.Text = "Version: 1.3.0";
+            this.lblVersion.Text = "Version: 1.3.1";
             this.lblDeveloper.Text = "Developer: Walton Surratt";
             this.lblCopyright.Text = "Copyright © 2026 Surratt Solutions";
         }
