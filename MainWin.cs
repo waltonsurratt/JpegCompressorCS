@@ -268,12 +268,6 @@ namespace JpegCompressorCS
         // ==============================
         // MOZJPEG COMPRESSION (per file)
         // ==============================
-        // Called concurrently from multiple thread-pool threads.
-        // • No shared mutable state except _pathLock (output naming only).
-        // • ArrayPool<byte> avoids repeated LOH allocations for the
-        //   compressed output buffer across hundreds or thousands of files.
-        // • Each worker creates its own TJCompressor — the native MozJPEG
-        //   context is not thread-safe and must not be shared.
         private void CompressJpeg(
             string inputPath,
             string outputDir,
@@ -283,43 +277,69 @@ namespace JpegCompressorCS
         {
             token.ThrowIfCancellationRequested();
 
-            // ── Load ────────────────────────────────────────────────────
-            using Bitmap source = new(inputPath);
+            // ── Load raw bytes once — used for CMYK sniff + GDI+ decode ────
+            byte[] rawBytes = File.ReadAllBytes(inputPath);
             token.ThrowIfCancellationRequested();
 
-            // ── Normalise pixel format ──────────────────────────────────
-            // MozJpegSharp only accepts 24bpp RGB. Some JPEGs decode to
-            // 32bpp ARGB or indexed colour, so redraw into a safe format.
-            Bitmap bitmap;
-            bool ownsBitmap;
+            // ── Detect CMYK/YCCK before handing to GDI+ ────────────────────
+            bool isCmyk = JpegHasFourComponents(rawBytes);
 
-            if (source.PixelFormat ==
-                System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+            // ── Decode to a 24bpp RGB Bitmap ────────────────────────────────
+            Bitmap bitmap;
+
+            if (isCmyk)
             {
-                bitmap = source;
-                ownsBitmap = false;
+                // CMYK / YCCK JPEG — GDI+ refuses to construct a Bitmap from
+                // these directly; convert channel-by-channel to RGB first.
+                bitmap = ConvertCmykJpegToRgbBitmap(rawBytes);
             }
             else
             {
-                bitmap = new Bitmap(
-                    source.Width, source.Height,
-                    System.Drawing.Imaging.PixelFormat.Format24bppRgb);
-                using Graphics g = Graphics.FromImage(bitmap);
-                g.DrawImage(source, 0, 0, source.Width, source.Height);
-                ownsBitmap = true;
+                // Standard YCbCr / greyscale JPEG.
+                using MemoryStream ms = new(rawBytes, writable: false);
+                Bitmap source = new(ms);
+
+                if (source.PixelFormat ==
+                    System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+                {
+                    bitmap = source;
+                }
+                else
+                {
+                    bitmap = new Bitmap(source.Width, source.Height,
+                        System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                    using Graphics g = Graphics.FromImage(bitmap);
+                    g.DrawImage(source, 0, 0, source.Width, source.Height);
+                    source.Dispose();
+                }
             }
 
             try
             {
-                // ── Strip EXIF ──────────────────────────────────────────
+                token.ThrowIfCancellationRequested();
+
+                // ── Read orientation BEFORE stripping EXIF ──────────────────
+                // Parsed directly from the raw JFIF bytes so byte order is
+                // handled correctly for both iPhone (big-endian) and Android
+                // (little-endian) Exif streams.
+                RotateFlipType rotation = ReadExifOrientation(rawBytes);
+
+                // ── Strip EXIF ──────────────────────────────────────────────
                 if (removeMetadata)
                     StripExifData(bitmap);
 
+                // ── Apply orientation to pixel data ─────────────────────────
+                // GDI+ Bitmap.RotateFlip physically transforms the pixel grid
+                // so the output is correctly oriented regardless of any EXIF
+                // tag — viewers that ignore EXIF will still see it right-way-up.
+                // This is a no-op (RotateNoneFlipNone) for normally-oriented
+                // images, so there is zero cost for the common case.
+                if (rotation != RotateFlipType.RotateNoneFlipNone)
+                    bitmap.RotateFlip(rotation);
+
                 token.ThrowIfCancellationRequested();
 
-                // ── MozJPEG encode ──────────────────────────────────────
-                // Each worker owns its TJCompressor; the native context is
-                // not thread-safe and must not be shared across threads.
+                // ── MozJPEG encode ──────────────────────────────────────────
                 byte[] compressed;
                 using (TJCompressor compressor = new())
                 {
@@ -332,10 +352,7 @@ namespace JpegCompressorCS
 
                 token.ThrowIfCancellationRequested();
 
-                // ── Resolve output path (thread-safe) ───────────────────
-                // Lock only long enough to find a unique filename; actual
-                // disk write happens outside the lock so other workers
-                // aren't stalled during I/O.
+                // ── Resolve output path (thread-safe) ───────────────────────
                 string outputPath;
                 lock (_pathLock)
                 {
@@ -348,17 +365,10 @@ namespace JpegCompressorCS
                             outputDir, $"{baseName}_mini_{dup}.jpg");
                         dup++;
                     }
-
-                    // Reserve the path by creating the file immediately so
-                    // no other worker can claim the same name between the
-                    // exists-check above and the WriteAllBytes below.
                     File.WriteAllBytes(outputPath, Array.Empty<byte>());
                 }
 
-                // ── Write to disk (outside lock) ────────────────────────
-                // ArrayPool<byte> prevents the compressed buffer from
-                // being promoted to the Large Object Heap (LOH), which
-                // would otherwise cause Gen2 GC pauses on large batches.
+                // ── Write to disk (outside lock) ────────────────────────────
                 byte[] rented = ArrayPool<byte>.Shared.Rent(compressed.Length);
                 try
                 {
@@ -368,8 +378,8 @@ namespace JpegCompressorCS
                         FileMode.Create,
                         FileAccess.Write,
                         FileShare.None,
-                        bufferSize: 65_536,       // 64 KB write buffer
-                        useAsync: false);          // sequential write; sync is faster
+                        bufferSize: 65_536,
+                        useAsync: false);
                     fs.Write(rented, 0, compressed.Length);
                 }
                 finally
@@ -379,9 +389,257 @@ namespace JpegCompressorCS
             }
             finally
             {
-                if (ownsBitmap)
-                    bitmap.Dispose();
+                bitmap.Dispose();
             }
+        }
+
+        // ==============================
+        // CMYK / YCCK DETECTION
+        // ==============================
+        // Walks the JFIF marker stream looking for a SOF (Start Of Frame)
+        // segment.  The SOF payload byte at offset 7 is the component count:
+        //   3 → YCbCr   4 → CMYK or YCCK
+        // Returns true only when a 4-component SOF is found; defaults to
+        // false (safe / RGB assumed) for any malformed or unknown stream.
+        private static bool JpegHasFourComponents(byte[] jpeg)
+        {
+            int i = 2; // skip SOI marker (FF D8)
+            while (i + 3 < jpeg.Length)
+            {
+                if (jpeg[i] != 0xFF)
+                    break; // not a valid marker boundary
+
+                byte marker = jpeg[i + 1];
+                i += 2;
+
+                // Markers with no length field
+                if (marker == 0xD8 || marker == 0xD9 || marker == 0x01 ||
+                    (marker >= 0xD0 && marker <= 0xD7))
+                    continue;
+
+                if (i + 2 > jpeg.Length)
+                    break;
+
+                int segLen = (jpeg[i] << 8) | jpeg[i + 1];
+
+                // SOF markers: C0-C3, C5-C7, C9-CB, CD-CF
+                bool isSof = (marker >= 0xC0 && marker <= 0xC3) ||
+                             (marker >= 0xC5 && marker <= 0xC7) ||
+                             (marker >= 0xC9 && marker <= 0xCB) ||
+                             (marker >= 0xCD && marker <= 0xCF);
+
+                if (isSof && i + 7 < jpeg.Length)
+                    return jpeg[i + 7] == 4; // component count byte
+
+                i += segLen;
+            }
+            return false;
+        }
+
+        // ==============================
+        // CMYK → RGB CONVERSION
+        // ==============================
+        // GDI+ can load CMYK JPEG dimensions and raw pixel bytes via
+        // LockBits even though it refuses to construct a Bitmap from the file
+        // path.  We exploit that: load as an Image, lock the pixel data, and
+        // convert each CMYK (or YCCK) quad to an RGB triple.
+        //
+        // CMYK → RGB:  R = C×K/255,  G = M×K/255,  B = Y×K/255
+        // (values are stored inverted in JPEG: 255 = 0% ink)
+        private static Bitmap ConvertCmykJpegToRgbBitmap(byte[] rawBytes)
+        {
+            // Image.FromStream can parse CMYK JPEG headers — unlike Bitmap ctor.
+            using MemoryStream ms = new(rawBytes, writable: false);
+            using Image img = Image.FromStream(ms, useEmbeddedColorManagement: false,
+                                               validateImageData: false);
+
+            int w = img.Width;
+            int h = img.Height;
+
+            // Draw onto a 32bpp surface so GDI+ gives us accessible pixel data.
+            using Bitmap tmp = new(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(tmp))
+                g.DrawImage(img, 0, 0, w, h);
+
+            Bitmap rgb = new(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+
+            var srcRect = new Rectangle(0, 0, w, h);
+            var srcData = tmp.LockBits(srcRect,
+                               System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                               System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            var dstData = rgb.LockBits(srcRect,
+                               System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                               System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            try
+            {
+                unsafe
+                {
+                    byte* src = (byte*)srcData.Scan0;
+                    byte* dst = (byte*)dstData.Scan0;
+
+                    for (int y = 0; y < h; y++)
+                    {
+                        byte* srcRow = src + y * srcData.Stride;
+                        byte* dstRow = dst + y * dstData.Stride;
+
+                        for (int x = 0; x < w; x++)
+                        {
+                            // GDI+ stores CMYK JPEG as BGRA where the channels
+                            // map to:  B=C  G=M  R=Y  A=K  (all inverted: 255=0%)
+                            byte c = srcRow[x * 4 + 0]; // Cyan
+                            byte m = srcRow[x * 4 + 1]; // Magenta
+                            byte yr = srcRow[x * 4 + 2]; // Yellow
+                            byte k = srcRow[x * 4 + 3]; // Key (Black)
+
+                            dstRow[x * 3 + 0] = (byte)(c * k / 255); // B
+                            dstRow[x * 3 + 1] = (byte)(m * k / 255); // G
+                            dstRow[x * 3 + 2] = (byte)(yr * k / 255); // R
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                tmp.UnlockBits(srcData);
+                rgb.UnlockBits(dstData);
+            }
+
+            return rgb;
+        }
+
+        // ==============================
+        // EXIF ORIENTATION
+        // ==============================
+        // EXIF tag 0x0112 encodes how the camera was held when the photo was
+        // taken.  Values 1-8 map to the eight possible orientations defined by
+        // the EXIF spec.  GDI+ loads the raw pixel grid exactly as stored on
+        // disk and does NOT auto-rotate — so a portrait shot stored sideways
+        // with an orientation tag of 6 will appear rotated 90° unless we apply
+        // the corresponding RotateFlip transform to the pixel data ourselves.
+        //
+        // We read the tag BEFORE stripping EXIF so the value is still present,
+        // then apply the rotation AFTER stripping so the output has neither a
+        // stale orientation tag nor a mismatch between tag and pixel data.
+        //
+        // CRITICAL — byte order:
+        // GDI+ PropertyItem.Value returns the tag bytes exactly as they are
+        // stored in the Exif stream — it does NOT normalise to little-endian.
+        // iPhones write big-endian Exif (Motorola "MM"), so for orientation=6
+        // the two Value bytes are [0x00, 0x06]. Reading only Value[0] gives 0,
+        // which maps to "no rotation" — silently wrong for every iPhone photo.
+        // We detect the byte order from the raw Exif APP1 segment and read the
+        // UINT16 correctly for both 'II' (little-endian) and 'MM' (big-endian).
+        private static RotateFlipType ReadExifOrientation(byte[] rawJpegBytes)
+        {
+            const int ExifOrientationTag = 0x0112;
+
+            try
+            {
+                // Walk the JFIF marker stream to find the APP1 (FF E1) segment.
+                int pos = 2; // skip SOI
+                while (pos + 3 < rawJpegBytes.Length)
+                {
+                    if (rawJpegBytes[pos] != 0xFF)
+                        break;
+
+                    byte marker = rawJpegBytes[pos + 1];
+                    pos += 2;
+
+                    // Standalone markers — no length field
+                    if (marker == 0xD8 || marker == 0xD9 ||
+                        marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7))
+                        continue;
+
+                    if (pos + 2 > rawJpegBytes.Length) break;
+                    int segLen = (rawJpegBytes[pos] << 8) | rawJpegBytes[pos + 1];
+
+                    if (marker == 0xE1 && segLen > 8)
+                    {
+                        // APP1 payload starts after the 2-byte length field.
+                        // Layout: "Exif\0\0" (6 bytes) then the TIFF/IFD block.
+                        int payloadStart = pos + 2;
+                        if (rawJpegBytes[payloadStart] == 'E' &&
+                            rawJpegBytes[payloadStart + 1] == 'x' &&
+                            rawJpegBytes[payloadStart + 2] == 'i' &&
+                            rawJpegBytes[payloadStart + 3] == 'f')
+                        {
+                            int tiffBase = payloadStart + 6;
+                            RotateFlipType result =
+                                ReadOrientationFromTiff(rawJpegBytes, tiffBase);
+                            return result;
+                        }
+                    }
+
+                    pos += segLen;
+                }
+            }
+            catch
+            {
+                // Any parse failure — default to no rotation.
+            }
+
+            return RotateFlipType.RotateNoneFlipNone;
+        }
+
+        private static RotateFlipType ReadOrientationFromTiff(
+            byte[] data, int tiffBase)
+        {
+            // First two bytes of the TIFF block are the byte-order mark.
+            // "II" = Intel = little-endian.  "MM" = Motorola = big-endian.
+            if (tiffBase + 8 > data.Length)
+                return RotateFlipType.RotateNoneFlipNone;
+
+            bool bigEndian = data[tiffBase] == 'M' && data[tiffBase + 1] == 'M';
+
+            ushort ReadU16(int offset) => bigEndian
+                ? (ushort)((data[tiffBase + offset] << 8) | data[tiffBase + offset + 1])
+                : (ushort)(data[tiffBase + offset] | data[tiffBase + offset + 1] << 8);
+
+            uint ReadU32(int offset) => bigEndian
+                ? (uint)((data[tiffBase + offset] << 24) | (data[tiffBase + offset + 1] << 16) |
+                         (data[tiffBase + offset + 2] << 8) | data[tiffBase + offset + 3])
+                : (uint)(data[tiffBase + offset] | (data[tiffBase + offset + 1] << 8) |
+                         (data[tiffBase + offset + 2] << 16) | ((uint)data[tiffBase + offset + 3] << 24));
+
+            // Offset to IFD0 is at bytes 4-7 of the TIFF block.
+            int ifd0Offset = (int)ReadU32(4);
+            if (tiffBase + ifd0Offset + 2 > data.Length)
+                return RotateFlipType.RotateNoneFlipNone;
+
+            int entryCount = ReadU16(ifd0Offset);
+
+            for (int i = 0; i < entryCount; i++)
+            {
+                int entryOffset = ifd0Offset + 2 + i * 12;
+                if (tiffBase + entryOffset + 12 > data.Length) break;
+
+                ushort tag = ReadU16(entryOffset);
+                if (tag != 0x0112) continue;
+
+                // Found the orientation tag.
+                // Type should be SHORT (3); value fits in the 4-byte value field.
+                // For big-endian: value occupies the first 2 bytes of the field.
+                // For little-endian: value occupies the first 2 bytes as well
+                // but in LE order — ReadU16 handles both.
+                ushort orientation = ReadU16(entryOffset + 8);
+
+                // EXIF orientation → GDI+ RotateFlipType:
+                //  1 = normal          3 = 180°    6 = 90° CW    8 = 90° CCW
+                //  2 = flip H          4 = flip V  5 = 90°CW+flipH  7 = 90°CCW+flipH
+                return orientation switch
+                {
+                    2 => RotateFlipType.RotateNoneFlipX,
+                    3 => RotateFlipType.Rotate180FlipNone,
+                    4 => RotateFlipType.RotateNoneFlipY,
+                    5 => RotateFlipType.Rotate90FlipX,
+                    6 => RotateFlipType.Rotate90FlipNone,
+                    7 => RotateFlipType.Rotate270FlipX,
+                    8 => RotateFlipType.Rotate270FlipNone,
+                    _ => RotateFlipType.RotateNoneFlipNone,
+                };
+            }
+
+            return RotateFlipType.RotateNoneFlipNone;
         }
 
         // ==============================
